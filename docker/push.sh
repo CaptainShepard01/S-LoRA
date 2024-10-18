@@ -1,1 +1,1 @@
-docker push registry.rcp.epfl.ch/sacs_balykov/slora:latest
+docker push slora:latest
