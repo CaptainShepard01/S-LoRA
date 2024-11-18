@@ -1,5 +1,6 @@
 import uvloop
 import asyncio
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 import os
 import pickle
@@ -82,17 +83,16 @@ class RouterManager:
         self.eos_id = eos_id
         self.has_wait_tokens = 0
         self.max_wait_tokens = 10
-        
+
         context = zmq.asyncio.Context(2)
         self.recv_from_httpserver = context.socket(zmq.PULL)
         self.recv_from_httpserver.bind(f"tcp://127.0.0.1:{router_port}")
-        
+
         self.send_to_detokenization = context.socket(zmq.PUSH)
         self.send_to_detokenization.connect(f"tcp://127.0.0.1:{detokenization_port}")
         self.model_rpc_ports = model_rpc_ports
 
         self.stats_tool = Stats(log_stats, log_stats_interval)
-
 
     async def wait_to_model_ready(self):
         self.model_rpcs: List[ModelRpcClient] = []
@@ -117,7 +117,7 @@ class RouterManager:
 
         await asyncio.gather(*init_model_ret)
         return
-    
+
     async def profile_prefill(self):
         res = []
         for rank_id in range(self.world_size):  # async init model process
@@ -131,19 +131,21 @@ class RouterManager:
         cache_dir = os.path.expanduser("~/.cache/slora")
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
-        with open(cache_dir+"/profile_results.pkl", "wb") as f:
+        with open(cache_dir + "/profile_results.pkl", "wb") as f:
             pickle.dump(results[0], f)
         return
 
-
     def add_req(
-        self,
-        adapter_dir: str,
-        prompt_ids: List[int],
-        sampling_params: SamplingParams,
-        request_id: str
+            self,
+            adapter_dir: str,
+            prompt_ids: List[int],
+            sampling_params: SamplingParams,
+            request_id: str,
+            target_ids: Optional[List[int]] = None,
     ):
-        req = Req(adapter_dir, request_id, prompt_ids, sampling_params)
+        # print("Add Req")
+        # print("Target ids:", target_ids)
+        req = Req(adapter_dir, request_id, prompt_ids, sampling_params, target_ids)
         self.req_queue.append(req)
         self.send_to_detokenization.send_pyobj(req.to_req_detokenization_state())
         return
@@ -160,17 +162,18 @@ class RouterManager:
                 req.aborted = True
         return
 
-    async def loop_for_fwd(self,):
+    async def loop_for_fwd(self, ):
         counter_count = 0
         while True:
             await self._step()
             counter_count += 1
             if self.running_batch is not None:
                 if counter_count % 50 == 0:
-                    print("current batch size:", len(self.running_batch.reqs), "token used ratio:", self.running_batch.calcu_used_tokens() / self.input_params.max_total_token_num)
+                    print("current batch size:", len(self.running_batch.reqs), "token used ratio:",
+                          self.running_batch.calcu_used_tokens() / self.input_params.max_total_token_num)
                     pass
                 self.stats_tool.print_stats()
-                
+
             if self.running_batch is None:
                 await asyncio.sleep(0.01)  # 10ms
 
@@ -195,7 +198,6 @@ class RouterManager:
                         ret.append(self.model_rpcs[tp_rank].load_adapters(new_batch.adapter_dirs))
                     await asyncio.gather(*ret)
 
-                
                 # merge adapter to base model
                 if self.input_params.scheduler == "peft":
                     torch.cuda.synchronize()
@@ -203,7 +205,7 @@ class RouterManager:
                     for tp_rank in range(self.world_size):
                         ret.append(self.model_rpcs[tp_rank].merge_adapter())
                     await asyncio.gather(*ret)
-            
+
                 torch.cuda.synchronize()
                 await self._prefill_batch(self.running_batch)
                 await self._filter_runing_batch()
@@ -214,8 +216,8 @@ class RouterManager:
             self.stats_tool.count_output_tokens(self.running_batch)
             # prefetch
             if (not self.input_params.no_lora and
-                self.input_params.prefetch and (self.has_wait_tokens == self.max_wait_tokens // 2 or
-                self.has_wait_tokens == self.max_wait_tokens - 3) and self.input_params.scheduler != "peft"):
+                    self.input_params.prefetch and (self.has_wait_tokens == self.max_wait_tokens // 2 or
+                                                    self.has_wait_tokens == self.max_wait_tokens - 3) and self.input_params.scheduler != "peft"):
                 next_batch = self.req_queue.next_batch()
                 if next_batch is not None:
                     ret = []
@@ -251,7 +253,6 @@ class RouterManager:
                 self.stats_tool.count_output_tokens(self.running_batch)
                 await self._decode_batch(self.running_batch)
                 await self._filter_runing_batch()
-        
 
     async def _init_batch(self, batch: Batch):
         reqs = [r.to_rpc_obj() for r in batch.reqs]
@@ -273,7 +274,7 @@ class RouterManager:
         await self._handle_finish_req(batch, has_new_finished_req, minibatch=True)
         return
 
-    async def _decode_batch(self, batch:Batch):
+    async def _decode_batch(self, batch: Batch):
         self.req_queue.update_counter(batch)
         rets = [self.model_rpcs[tp_rank].decode_batch(batch.batch_id) for tp_rank in range(self.world_size)]
         ans = await asyncio.gather(*rets)
@@ -289,12 +290,14 @@ class RouterManager:
 
     async def _filter_batch(self, batch: Batch):
         req_id_list = [r.request_id for r in batch.reqs]
-        rets = [self.model_rpcs[tp_rank].filter_batch(batch.batch_id, req_id_list) for tp_rank in range(self.world_size)]
+        rets = [self.model_rpcs[tp_rank].filter_batch(batch.batch_id, req_id_list) for tp_rank in
+                range(self.world_size)]
         await asyncio.gather(*rets)
         return
 
     async def _merge_batch(self, batch1, batch2):
-        rets = [self.model_rpcs[tp_rank].merge_batch(batch1.batch_id, batch2.batch_id) for tp_rank in range(self.world_size)]
+        rets = [self.model_rpcs[tp_rank].merge_batch(batch1.batch_id, batch2.batch_id) for tp_rank in
+                range(self.world_size)]
         await asyncio.gather(*rets)
         return
 
@@ -337,29 +340,37 @@ class RouterManager:
 
             self.running_batch = None
             return
-    
+
     def _add_token_id_to_req(self, batch: Batch, req_ans):
         for req_id, (new_token_id, new_gen_metadata) in req_ans.items():
             req = batch.id_to_reqs[req_id]
             req.output_ids.append(new_token_id)
             req.output_metadata_list.append(new_gen_metadata)
         return
-        
+
     def _send_to_detokenization_proc(self, batch: Batch, req_ans):
         batch_out = BatchTokenIdOut()
         for req_id, (new_token_id, new_gen_metadata) in req_ans.items():
             req = batch.id_to_reqs[req_id]
             batch_out.reqs_infs.append((req_id, new_token_id, new_gen_metadata, req.has_generate_finished, req.aborted))
-    
+
         self.send_to_detokenization.send_pyobj(batch_out)
         return
 
     async def loop_for_netio_req(self):
         while True:
             recv_req = await self.recv_from_httpserver.recv_pyobj()
-            if isinstance(recv_req, tuple) and len(recv_req) == 4:
-                adapter_dir, prompt_ids, sampling_params, request_id = recv_req
-                self.add_req(adapter_dir, prompt_ids, sampling_params, request_id)
+            if isinstance(recv_req, tuple):
+                if len(recv_req) == 4:
+                    # Handle normal inference request
+                    adapter_dir, prompt_ids, sampling_params, request_id = recv_req
+                    self.add_req(adapter_dir, prompt_ids, sampling_params, request_id)
+                elif len(recv_req) == 5:
+                    # Handle inference request with target
+                    adapter_dir, prompt_ids, sampling_params, request_id, target_ids = recv_req
+                    # print("Target is not None")
+                    # print("Target ids:", target_ids)
+                    self.add_req(adapter_dir, prompt_ids, sampling_params, request_id, target_ids)
             elif isinstance(recv_req, AbortReq):
                 abort_req = recv_req
                 request_id = abort_req.req_id
@@ -400,7 +411,7 @@ def start_router_process(args, router_port, detokenization_port, model_rpc_ports
                                bmm=args.bmm,
                                no_lora=args.no_lora,
                                fair_weights=args.fair_weights,
-                              )
+                               )
 
     try:
         router = RouterManager(
@@ -414,10 +425,10 @@ def start_router_process(args, router_port, detokenization_port, model_rpc_ports
             model_rpc_ports=model_rpc_ports,
             input_params=input_params,
             mode=mode,
-            log_stats = not args.disable_log_stats,
-            log_stats_interval = args.log_stats_interval,
+            log_stats=not args.disable_log_stats,
+            log_stats_interval=args.log_stats_interval,
         )
-    
+
         asyncio.run(router.wait_to_model_ready())
         if input_params.profile:
             asyncio.run(router.profile_prefill())
@@ -427,9 +438,9 @@ def start_router_process(args, router_port, detokenization_port, model_rpc_ports
         elif input_params.scheduler == "pets":
             # loading from file
             cache_dir = os.path.expanduser("~/.cache/slora")
-            router.req_queue.alpha = AlphaModel.from_file(cache_dir+"/profile_results.pkl")
-            router.req_queue.beta = BetaModel.from_file(cache_dir+"/profile_results.pkl")
-    
+            router.req_queue.alpha = AlphaModel.from_file(cache_dir + "/profile_results.pkl")
+            router.req_queue.beta = BetaModel.from_file(cache_dir + "/profile_results.pkl")
+
     except Exception as e:
         import traceback
         err_str = '\n'.join(traceback.format_exception(e))
@@ -438,7 +449,7 @@ def start_router_process(args, router_port, detokenization_port, model_rpc_ports
         raise
 
     pipe_writer.send('init ok')
-    
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(router.loop_for_fwd())

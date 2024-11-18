@@ -33,9 +33,21 @@ class ModelRpcServer(rpyc.Service):
 
     def exposed_init_model(self, rank_id, world_size, weight_dir, adapter_dirs,
                            max_total_token_num, load_way, mode, input_params,
-			   prefetch_stream):
+                           prefetch_stream):
         import torch
         import torch.distributed as dist
+
+        self.training = True
+        self.optimizer_state = {
+            "step": 0,
+            "m": defaultdict(float),  # First moment
+            "v": defaultdict(float)  # Second moment
+        }
+        self.learning_rate = 1e-4
+        self.beta1 = 0.9
+        self.beta2 = 0.999
+        self.eps = 1e-8
+
         if world_size != 1:
             trans_list = [obtain(e) for e in (rank_id, world_size, weight_dir, adapter_dirs,
                                               max_total_token_num, load_way, mode)]
@@ -50,7 +62,8 @@ class ModelRpcServer(rpyc.Service):
 
         self.cache = {}
 
-        dist.init_process_group('nccl', init_method=f'tcp://127.0.0.1:{setting["nccl_port"]}', rank=rank_id, world_size=world_size)
+        dist.init_process_group('nccl', init_method=f'tcp://127.0.0.1:{setting["nccl_port"]}', rank=rank_id,
+                                world_size=world_size)
         torch.cuda.set_device(rank_id)
 
         model_cfg = get_model_config(weight_dir, dummy=input_params.dummy)
@@ -60,17 +73,17 @@ class ModelRpcServer(rpyc.Service):
             if self.model_type == "llama":
                 if "num_key_value_heads" in model_cfg.keys():
                     self.model = Llama2TpPartModel(rank_id, world_size, weight_dir,
-                                                    max_total_token_num,
-                                                    mem_adapter_size=input_params.pool_size_lora,
-                                                    load_way=load_way, mode=mode,
-                                                    dummy=input_params.dummy)
-                    
+                                                   max_total_token_num,
+                                                   mem_adapter_size=input_params.pool_size_lora,
+                                                   load_way=load_way, mode=mode,
+                                                   dummy=input_params.dummy)
+
                 else:
                     self.model = LlamaTpPartModel(rank_id, world_size, weight_dir,
-                                                    max_total_token_num,
-                                                    mem_adapter_size=input_params.pool_size_lora,
-                                                    load_way=load_way, mode=mode,
-                                                    dummy=input_params.dummy)
+                                                  max_total_token_num,
+                                                  mem_adapter_size=input_params.pool_size_lora,
+                                                  load_way=load_way, mode=mode,
+                                                  dummy=input_params.dummy)
             else:
                 raise Exception(f"can not support {self.model_type} now")
         except Exception as e:
@@ -88,7 +101,7 @@ class ModelRpcServer(rpyc.Service):
             self.adapters.append(LoraTpPartAdapter(rank_id, world_size, adapter_dir, model_cfg,
                                                    swap=input_params.swap, dummy=input_params.dummy,
                                                    no_lora_swap=input_params.no_lora_swap,
-						   prefetch_stream=prefetch_stream))
+                                                   prefetch_stream=prefetch_stream))
         self.adapter_id[None] = len(self.adapters)
         self.adapters.append(None)
 
@@ -101,10 +114,9 @@ class ModelRpcServer(rpyc.Service):
             self.infer_adapter = InferAdapter.init(self.model.mem_manager,
                                                    prefetch_stream)
         ''' finish init adapters '''
-        
+
         set_random_seed(2147483647)
         return
-
 
     @torch.no_grad()
     def exposed_load_adapters(self, adapter_dirs, prefetch=False):
@@ -125,7 +137,6 @@ class ModelRpcServer(rpyc.Service):
             #         total_num += 1 if adapter.is_on_gpu() else 0
             # print(f"total {total_num} on gpu")
 
-
     @torch.no_grad()
     def exposed_offload_adapters(self, reserve_dirs=None, prefetch=False):
         if not self.input_params.bmm:
@@ -136,7 +147,6 @@ class ModelRpcServer(rpyc.Service):
                 if adapter_dir is not None and adapter_dir not in reserve_dirs:
                     self.adapters[id].offload_from_gpu()
 
-
     # @calculate_time(show=True, min_cost_ms=0.1)
     def exposed_add_batch(self, batch_id, reqs, dtype):
         if self.world_size != 1:
@@ -146,10 +156,11 @@ class ModelRpcServer(rpyc.Service):
             dtype = torch.float16
         else:
             assert False, "error dtype"
-        batch_data = InferBatch.init_batch(batch_id, reqs, dtype, torch.cuda.current_device(), self.model.mem_manager, self.model.vocab_size)
+        batch_data = InferBatch.init_batch(batch_id, reqs, dtype, torch.cuda.current_device(), self.model.mem_manager,
+                                           self.model.vocab_size)
         self.cache[batch_id] = batch_data
         return
-    
+
     # @calculate_time(show=True, min_cost_ms=300)
     # @calculate_time(show=True, min_cost_ms=0)
     def exposed_prefill_batch(self, batch_id):
@@ -188,7 +199,7 @@ class ModelRpcServer(rpyc.Service):
         del batch
         # torch.cuda.empty_cache()
         return
-    
+
     def forward(self, batch_id, is_prefill):
         batch: InferBatch = self.cache.pop(batch_id)
         # print(batch.requests)
@@ -204,13 +215,11 @@ class ModelRpcServer(rpyc.Service):
             "is_prefill": is_prefill
         }
 
-        # assert False, f"{kwargs}"
-
         assert len(batch.adapter_dirs) == len(batch), "batch.adapter_dirs != batch"
 
         # always use lora batch infer
         if (self.input_params.no_lora or self.input_params.no_kernel or
-            self.input_params.scheduler == "peft" or set(batch.adapter_dirs) == {None}):
+                self.input_params.scheduler == "peft" or set(batch.adapter_dirs) == {None}):
             engine = self.model
         else:
             adapters = [self.adapters[self.adapter_id[adapter_dir]] for adapter_dir in batch.adapter_dirs]
@@ -222,7 +231,7 @@ class ModelRpcServer(rpyc.Service):
                 adapter_sep = [0]
                 cnt = 1
                 for i in range(1, len(batch.adapter_dirs)):
-                    if batch.adapter_dirs[i] == batch.adapter_dirs[i-1]:
+                    if batch.adapter_dirs[i] == batch.adapter_dirs[i - 1]:
                         cnt += 1
                     else:
                         compressed_dirs.append(batch.adapter_dirs[i])
@@ -233,15 +242,18 @@ class ModelRpcServer(rpyc.Service):
             else:
                 engine = LoraUnorderedBatchInfer(self.model, adapters, infer_adapter=self.infer_adapter)
             kwargs["no_lora_compute"] = self.input_params.no_lora_compute
-            # kwargs["no_lora_copy"] = self.input_params.no_lora_copy 
+            # kwargs["no_lora_copy"] = self.input_params.no_lora_copy
+
+        kwargs["target_ids"] = batch.target_ids
 
         logits = engine.forward(**kwargs)
         next_token_ids, next_token_probs = sample(logits, batch)
         next_token_ids = next_token_ids.detach().cpu().numpy()
         next_token_logprobs = torch.log(next_token_probs).detach().cpu().numpy()
         output_dict = {}
-        new_input_ids = []        
-        for i, (r, all_input_ids, next_token_id, next_token_logprob) in enumerate(zip(batch.requests, batch.all_input_ids, next_token_ids, next_token_logprobs)):
+        new_input_ids = []
+        for i, (r, all_input_ids, next_token_id, next_token_logprob) in enumerate(
+                zip(batch.requests, batch.all_input_ids, next_token_ids, next_token_logprobs)):
             # all_input_ids_tensor = torch.tensor(all_input_ids, dtype=torch.long, device="cuda")
             all_input_ids.append(int(next_token_id))
             # all_input_ids_tensor = None
@@ -254,9 +266,10 @@ class ModelRpcServer(rpyc.Service):
                 'logprob': float(next_token_logprob),
             }
             output_dict[r['request_id']] = (int(next_token_id), metadata)
-        
+
         batch.input_ids = torch.tensor(new_input_ids, dtype=torch.long).cuda()
-        batch.nopad_b_start_loc = batch.nopad_b_start_loc + torch.arange(0, len(batch), dtype=torch.int32, device="cuda")
+        batch.nopad_b_start_loc = batch.nopad_b_start_loc + torch.arange(0, len(batch), dtype=torch.int32,
+                                                                         device="cuda")
         batch.nopad_total_token_num += len(batch)
         batch.nopad_max_len_in_batch += 1
         batch.nopad_b_seq_len += 1
@@ -264,18 +277,17 @@ class ModelRpcServer(rpyc.Service):
         return output_dict
 
     def _profile_adapter_prefill(self, adapter, batch_size, max_input_len):
-        engine = LoraUnorderedBatchInfer(self.model, [adapter]*batch_size, infer_adapter=self.infer_adapter)
+        engine = LoraUnorderedBatchInfer(self.model, [adapter] * batch_size, infer_adapter=self.infer_adapter)
         self._profile_prefill(batch_size, max_input_len, adapter_engine=engine, rank_size=adapter.r)
-    
+
     def _profile_prefill(self, batch_size, max_input_len, adapter_engine=None, rank_size=None):
         # warm up
         input_len = max_input_len
-        test_data = np.vstack([np.arange(1, input_len+1) for _ in range(batch_size)])
+        test_data = np.vstack([np.arange(1, input_len + 1) for _ in range(batch_size)])
         test_data = test_data.reshape(-1)
         test_data = torch.from_numpy(test_data).cuda()
         engine = self.model if adapter_engine is None else adapter_engine
 
-        
         b_loc = torch.zeros(batch_size, input_len, dtype=torch.long, device="cuda")
         b_start_loc = torch.zeros(batch_size, dtype=torch.int32, device="cuda")
         b_seq_len = torch.zeros(batch_size, dtype=torch.int32, device="cuda")
@@ -285,26 +297,26 @@ class ModelRpcServer(rpyc.Service):
             b_seq_len[i] = input_len
 
         total_token_num = input_len * batch_size
-        logics = engine.forward(batch_size, 
-                                    total_token_num, 
-                                    input_len, 
-                                    test_data,
-                                    b_loc,
-                                    b_start_loc,
-                                    b_seq_len,
-                                    is_prefill=True)
+        logics = engine.forward(batch_size,
+                                total_token_num,
+                                input_len,
+                                test_data,
+                                b_loc,
+                                b_start_loc,
+                                b_seq_len,
+                                is_prefill=True)
         prob_out = torch.softmax(logics, dim=-1)
         predict_ids = torch.argmax(prob_out, dim=1, keepdim=True)
         predict_ids = predict_ids.detach().cpu().numpy()
-        
+
         max_len_in_batch = input_len
         for i in range(batch_size):
             self.model.mem_manager.free(b_loc[i, max_len_in_batch - b_seq_len[i]:max_len_in_batch])
-            
+
         b_loc = None
         b_start_loc = None
         b_seq_len = None
-        
+
         import torch.distributed as dist
         dist.barrier()
         torch.cuda.synchronize()
@@ -320,7 +332,7 @@ class ModelRpcServer(rpyc.Service):
 
         total_token_num = batch_size * input_len
         logics = engine.forward(batch_size, total_token_num, input_len, test_data,
-                                                    b_loc, b_start_loc, b_seq_len, is_prefill=True)
+                                b_loc, b_start_loc, b_seq_len, is_prefill=True)
         prob_out = torch.softmax(logics, dim=-1)
         predict_ids = torch.argmax(prob_out, dim=1, keepdim=True)
         predict_ids = predict_ids.detach().cpu().numpy()
@@ -330,13 +342,13 @@ class ModelRpcServer(rpyc.Service):
             self.base_prefill[batch_size][input_len] = time.time() - prefill_start_time
         else:
             self.adapter_prefill[rank_size][batch_size][input_len] = time.time() - prefill_start_time
-        
+
         max_len_in_batch = input_len
         for i in range(batch_size):
             self.model.mem_manager.free(b_loc[i, max_len_in_batch - b_seq_len[i]:max_len_in_batch])
-        
+
         return
-    
+
     def exposed_profile_prefill(self):
         max_bs = self.model.mem_manager.tot_size // 2048
         print(max_bs)
@@ -352,8 +364,9 @@ class ModelRpcServer(rpyc.Service):
                 self.adapter_prefill[adapter.r] = defaultdict(dict)
                 self.infer_adapter.load_adapters([adapter], prefetch=False)
                 torch.cuda.synchronize()
-                for bs in range(2, max_bs+1, 2):
-                    for input_len in tqdm(range(32, max_input_len+1, 32), desc=f"profile prefill bs={bs}, adapter={adapter.r}"):
+                for bs in range(2, max_bs + 1, 2):
+                    for input_len in tqdm(range(32, max_input_len + 1, 32),
+                                          desc=f"profile prefill bs={bs}, adapter={adapter.r}"):
                         if bs not in self.base_prefill or input_len not in self.base_prefill[bs]:
                             self._profile_prefill(bs, input_len)
                         self._profile_adapter_prefill(adapter, bs, input_len)
@@ -384,12 +397,15 @@ class ModelRpcClient:
         if self.use_rpc:
             def async_wrap(f):
                 f = rpyc.async_(f)
+
                 async def _func(*args, **kwargs):
                     ans = f(*args, **kwargs)
                     await asyncio.to_thread(ans.wait)
                     # raise if exception
                     return ans.value
+
                 return _func
+
             self._init_model = async_wrap(self.model.init_model)
             self._load_adapters = rpyc.async_(self.model.load_adapters)
             self._offload_adapters = rpyc.async_(self.model.offload_adapters)
@@ -419,30 +435,27 @@ class ModelRpcClient:
 
     async def init_model(self, rank_id, world_size, weight_dir, adapter_dirs,
                          max_total_token_num, load_way, mode, input_params,
-			 prefetch_stream):
-        ans : rpyc.AsyncResult = self._init_model(rank_id, world_size, weight_dir, adapter_dirs,
-                                                  max_total_token_num, load_way, mode, input_params,
-						  prefetch_stream)
+                         prefetch_stream):
+        ans: rpyc.AsyncResult = self._init_model(rank_id, world_size, weight_dir, adapter_dirs,
+                                                 max_total_token_num, load_way, mode, input_params,
+                                                 prefetch_stream)
         if self.use_rpc:
             await ans
             return
         else:
             return
 
-
     async def load_adapters(self, reqs, prefetch=False):
         self._load_adapters(reqs, prefetch=prefetch)
 
-
     async def offload_adapters(self, reserved_reqs=None, prefetch=False):
         self._offload_adapters(reserved_reqs, prefetch=prefetch)
-    
+
     async def unmerge_adapter(self):
         self._unmerge_adapter()
-    
+
     async def merge_adapter(self):
         self._merge_adapter()
-
 
     async def init_batch(self, batch_id, reqs):
         ans = self._add_batch(batch_id, reqs, "fp16")
@@ -472,7 +485,7 @@ class ModelRpcClient:
             await ans
             return
         else:
-            return 
+            return
 
     async def merge_batch(self, batch_id1, batch_id2):
         ans = self._merge_batch(batch_id1, batch_id2)
@@ -489,7 +502,7 @@ class ModelRpcClient:
             return
         else:
             return
-    
+
     async def profile_prefill(self):
         ans = self._profile_prefill()
         if self.use_rpc:
@@ -509,7 +522,7 @@ async def start_model_process(port, world_size):
     # 单卡时不使用 rpc
     if world_size == 1:
         return ModelRpcClient(ModelRpcServer(), world_size)
-    
+
     import multiprocessing
     proc = multiprocessing.Process(target=_init_env, args=(port,))
     proc.start()

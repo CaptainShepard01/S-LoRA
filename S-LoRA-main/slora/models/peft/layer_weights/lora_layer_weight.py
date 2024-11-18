@@ -26,58 +26,80 @@ class LoraLayerWeight:
         # debug
         self.no_lora_swap = no_lora_swap
 
-
     def load_to_torch(self, path):
         numpy_type = {"fp32": np.float32, "fp16": np.float16}[self.data_type_]
         torch_type = {"fp32": torch.float32, "fp16": torch.float16}[self.data_type_]
         return torch.from_numpy(np.fromfile(path, dtype=numpy_type)).to(torch_type)
-
 
     def load_dummy_weights(self, swap):
         n_embed = self.network_config["hidden_size"]
         split_n_embed = n_embed // self.world_size_
         rank = self.lora_config["r"]
         if not swap or self.no_lora_swap:
-            self.q_lora_A = (torch.rand((rank, split_n_embed), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.q_lora_B = (torch.rand((split_n_embed, rank), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.k_lora_A = (torch.rand((rank, split_n_embed), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.k_lora_B = (torch.rand((split_n_embed, rank), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.v_lora_A = (torch.rand((rank, split_n_embed), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.v_lora_B = (torch.rand((split_n_embed, rank), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.o_lora_A = (torch.rand((rank, split_n_embed), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
-            self.o_lora_B = (torch.rand((split_n_embed, rank), 
-                                       dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3
+            self.q_lora_A = (torch.rand((rank, split_n_embed),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.q_lora_B = (torch.rand((split_n_embed, rank),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.k_lora_A = (torch.rand((rank, split_n_embed),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.k_lora_B = (torch.rand((split_n_embed, rank),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.v_lora_A = (torch.rand((rank, split_n_embed),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.v_lora_B = (torch.rand((split_n_embed, rank),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.o_lora_A = (torch.rand((rank, split_n_embed),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
+            self.o_lora_B = (torch.rand((split_n_embed, rank),
+                                        dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                        1).contiguous() * 2 - 1) * 1e-3
         else:
-            self.q_lora_A_home = ((torch.rand((rank, split_n_embed), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.q_lora_A_home = ((torch.rand((rank, split_n_embed),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.q_lora_A = None
-            self.q_lora_B_home = ((torch.rand((split_n_embed, rank), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.q_lora_B_home = ((torch.rand((split_n_embed, rank),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.q_lora_B = None
-            self.k_lora_A_home = ((torch.rand((rank, split_n_embed), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.k_lora_A_home = ((torch.rand((rank, split_n_embed),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.k_lora_A = None
-            self.k_lora_B_home = ((torch.rand((split_n_embed, rank), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.k_lora_B_home = ((torch.rand((split_n_embed, rank),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.k_lora_B = None
-            self.v_lora_A_home = ((torch.rand((rank, split_n_embed), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.v_lora_A_home = ((torch.rand((rank, split_n_embed),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.v_lora_A = None
-            self.v_lora_B_home = ((torch.rand((split_n_embed, rank), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.v_lora_B_home = ((torch.rand((split_n_embed, rank),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.v_lora_B = None
-            self.o_lora_A_home = ((torch.rand((rank, split_n_embed), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.o_lora_A_home = ((torch.rand((rank, split_n_embed),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.o_lora_A = None
-            self.o_lora_B_home = ((torch.rand((split_n_embed, rank), 
-                                            dtype=self.data_type_, device="cuda").transpose(0, 1).contiguous() * 2 - 1) * 1e-3).to("cpu")
+            self.o_lora_B_home = ((torch.rand((split_n_embed, rank),
+                                              dtype=self.data_type_, device="cuda").transpose(0,
+                                                                                              1).contiguous() * 2 - 1) * 1e-3).to(
+                "cpu")
             self.o_lora_B = None
 
             num_head = self.network_config["num_attention_heads"]
@@ -93,9 +115,10 @@ class LoraLayerWeight:
             self.w_combined_home = self.w_combined_home.reshape(2, 4 * rank, num_head, -1)
             self.w_combined = None
         return
- 
 
     def load_hf_weights(self, weights, swap=False, dummy=False):
+        # print("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+
         if dummy:
             self.load_dummy_weights(swap)
             return
@@ -157,7 +180,6 @@ class LoraLayerWeight:
 
         return
 
-
     def load_hf_weights_cpu(self, weights):
         n_embed = self.network_config["hidden_size"]
         split_n_embed = n_embed // self.world_size_
@@ -209,23 +231,22 @@ class LoraLayerWeight:
             self.o_lora_B_home = weights[f"{prefix}.o_proj.lora_B.weight"][tp_idx[0]:tp_idx[1], :]
             self.o_lora_B_home = self.o_lora_B_home.transpose(0, 1).contiguous().to(self.data_type_).pin_memory()
             self.o_lora_B = None
-        
+
         rank = self.lora_config["r"]
         num_head = self.network_config["num_attention_heads"]
         self.w_combined_home = torch.concat(
             [self.q_lora_A_home.T.reshape(rank, num_head, -1),
-                self.k_lora_A_home.T.reshape(rank, num_head, -1),
-                self.v_lora_A_home.T.reshape(rank, num_head, -1),
-                self.o_lora_A_home.T.reshape(rank, num_head, -1),
-                self.q_lora_B_home.T.reshape(rank, num_head, -1),
-                self.k_lora_B_home.T.reshape(rank, num_head, -1),
-                self.v_lora_B_home.T.reshape(rank, num_head, -1),
-                self.o_lora_B_home.T.reshape(rank, num_head, -1)]).pin_memory()
+             self.k_lora_A_home.T.reshape(rank, num_head, -1),
+             self.v_lora_A_home.T.reshape(rank, num_head, -1),
+             self.o_lora_A_home.T.reshape(rank, num_head, -1),
+             self.q_lora_B_home.T.reshape(rank, num_head, -1),
+             self.k_lora_B_home.T.reshape(rank, num_head, -1),
+             self.v_lora_B_home.T.reshape(rank, num_head, -1),
+             self.o_lora_B_home.T.reshape(rank, num_head, -1)]).pin_memory()
         self.w_combined_home = self.w_combined_home.reshape(2, 4 * rank, num_head, -1)
         self.w_combined = None
 
         return
-
 
     def load_to_gpu(self, prefetch=False, bmm=False):
         if not bmm:
@@ -234,6 +255,8 @@ class LoraLayerWeight:
                     self.w_combined = self.w_combined_home.to("cuda", non_blocking=True)
                 else:
                     self.w_combined = self.w_combined_home.to("cuda", non_blocking=True)
+
+                self.w_combined.requires_grad = True
         else:
             if self.q_lora_A is None:
                 self.q_lora_A = self.q_lora_A_home.to("cuda", non_blocking=True)
@@ -244,12 +267,20 @@ class LoraLayerWeight:
                 self.v_lora_B = self.v_lora_B_home.to("cuda", non_blocking=True)
                 self.o_lora_A = self.o_lora_A_home.to("cuda", non_blocking=True)
                 self.o_lora_B = self.o_lora_B_home.to("cuda", non_blocking=True)
- 
+
+                self.q_lora_A.requires_grad = True
+                self.q_lora_B.requires_grad = True
+                self.k_lora_A.requires_grad = True
+                self.k_lora_B.requires_grad = True
+                self.v_lora_A.requires_grad = True
+                self.v_lora_B.requires_grad = True
+                self.o_lora_A.requires_grad = True
+                self.o_lora_B.requires_grad = True
 
     def offload_from_gpu(self):
         if self.no_lora_swap:
             return
-        #assert self.q_lora_A is not None
+        # assert self.q_lora_A is not None
         self.w_combined = None
         self.q_lora_A = None
         self.q_lora_B = None

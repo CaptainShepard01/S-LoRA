@@ -56,7 +56,6 @@ from .api_models import (
 from slora.mprophet.measure import ModelProphet
 from slora.mprophet.lora_stats import LoRAProphet
 
-
 GB = 1024 ** 3
 MB = 1024 ** 2
 
@@ -75,6 +74,7 @@ def create_error_response(status_code: HTTPStatus, message: str) -> JSONResponse
 @app.get("/health")
 def healthcheck():
     return "OK"
+
 
 @app.post("/generate")
 async def generate(request: Request) -> Response:
@@ -145,7 +145,16 @@ async def generate_stream(request: Request) -> Response:
         request_id = request_dict["req_id"]
     else:
         request_id = uuid.uuid4().hex
-    results_generator = httpserver_manager.generate(adapter_dir, prompt, sampling_params, request_id)
+
+    import os
+    train_file = os.path.join(os.path.dirname(__file__), "finetune.json")
+    with open(train_file, 'r') as f:
+        training_data = json.load(f)
+
+    prompt = training_data["input"]
+    target = training_data["target"]
+
+    results_generator = httpserver_manager.generate(adapter_dir, prompt, sampling_params, request_id, target)
 
     # Streaming case
     async def stream_results() -> AsyncGenerator[bytes, None]:
@@ -180,7 +189,7 @@ async def generate_stream(request: Request) -> Response:
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
 async def chat_completions(
-    request: ChatCompletionRequest, raw_request: Request
+        request: ChatCompletionRequest, raw_request: Request
 ) -> Response:
     global isFirst
     if isFirst:
@@ -292,12 +301,12 @@ def print_mem_stats(args):
     model_size = fake_model.get_model_size()
     print(f"{model_name}: {model_size / GB:.2f} GB")
     peak_working_memory = fake_model.get_peak_working_memory(
-            bs=20, context_len=512, tiling_dim=512)
+        bs=20, context_len=512, tiling_dim=512)
     print(f"peak working mem for (bs=20, seqlen=512): {peak_working_memory / GB:.2f} GB")
     peak_working_memory = fake_model.get_peak_working_memory(
-            bs=100, context_len=512, tiling_dim=512)
+        bs=100, context_len=512, tiling_dim=512)
     print(f"peak working mem for (bs=100, seqlen=512): {peak_working_memory / GB:.2f} GB")
- 
+
     tot_lora_size = 0
     for lora_dir in args.lora_dirs:
         lora_name = lora_dir.split("/")[-1]
@@ -391,7 +400,7 @@ def main():
         args.batch_max_tokens = batch_max_tokens
     else:
         assert (
-            args.batch_max_tokens >= args.max_req_total_len
+                args.batch_max_tokens >= args.max_req_total_len
         ), "batch_max_tokens must >= max_req_total_len"
 
     can_use_ports = alloc_can_use_network_port(
@@ -468,5 +477,5 @@ def main():
 
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method('spawn'), # this code will not be ok for settings to fork to subprocess
+    torch.multiprocessing.set_start_method('spawn'),  # this code will not be ok for settings to fork to subprocess
     main()

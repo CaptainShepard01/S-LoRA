@@ -11,16 +11,16 @@ from ..io_struct import BatchStrOut, AbortReq, BatchAbortReq
 
 class HttpServerManager:
     def __init__(
-        self,
-        model_weightdir,
-        tokenizor_mode,
-        router_port,
-        httpserver_port,
-        total_token_num,
-        max_req_input_len,
-        max_req_total_len,
-        trust_remote_code,
-        dummy=False,
+            self,
+            model_weightdir,
+            tokenizor_mode,
+            router_port,
+            httpserver_port,
+            total_token_num,
+            max_req_input_len,
+            max_req_total_len,
+            trust_remote_code,
+            dummy=False,
     ):
         context = zmq.asyncio.Context(2)
         self.send_to_router = context.socket(zmq.PUSH)
@@ -29,11 +29,11 @@ class HttpServerManager:
         self.recv_from_detokenization = context.socket(zmq.PULL)
         self.recv_from_detokenization.bind(f"tcp://127.0.0.1:{httpserver_port}")
 
-        try: 
-            self.tokenizer = get_tokenizer(model_weightdir, tokenizor_mode, trust_remote_code=trust_remote_code) 
+        try:
+            self.tokenizer = get_tokenizer(model_weightdir, tokenizor_mode, trust_remote_code=trust_remote_code)
         except:
             if dummy:
-                self.tokenizer = get_tokenizer("huggyllama/llama-7b", tokenizor_mode) 
+                self.tokenizer = get_tokenizer("huggyllama/llama-7b", tokenizor_mode)
 
         self.req_id_to_out_inf = {}  # value type (out_str, metadata, finished, event)
 
@@ -41,9 +41,11 @@ class HttpServerManager:
         self.max_req_input_len = max_req_input_len
         self.max_req_total_len = max_req_total_len
 
-    async def generate(self, adapter_dir, prompt, sampling_params, request_id):
+    async def generate(self, adapter_dir, prompt, sampling_params, request_id, target=None):
 
         prompt_ids = self.tokenizer.encode(prompt)
+        if target is not None:
+            target_ids = self.tokenizer.encode(target)
         prompt_tokens = len(prompt_ids)
         if prompt_tokens > self.max_req_input_len:
             raise ValueError(
@@ -58,10 +60,14 @@ class HttpServerManager:
             raise ValueError(
                 f"the req token total len + 1 (input len + output len + 1) is too long > max_total_token_num:{self.total_token_num}"
             )
-        
+
         sampling_params.stop_sentences_to_token_ids(self.tokenizer)
 
-        self.send_to_router.send_pyobj((adapter_dir, prompt_ids, sampling_params, request_id))
+        if target is not None:
+            # print("send to router with target")
+            self.send_to_router.send_pyobj((adapter_dir, prompt_ids, sampling_params, request_id, target_ids))
+        else:
+            self.send_to_router.send_pyobj((adapter_dir, prompt_ids, sampling_params, request_id))
         event = asyncio.Event()
         self.req_id_to_out_inf[request_id] = ("", {}, False, event)
         while True:
@@ -98,7 +104,7 @@ class HttpServerManager:
 
     async def handle_loop(self):
         while True:
-            recv_ans:Union(BatchStrOut, BatchAbortReq) = await self.recv_from_detokenization.recv_pyobj()
+            recv_ans: Union(BatchStrOut, BatchAbortReq) = await self.recv_from_detokenization.recv_pyobj()
             assert isinstance(recv_ans, (BatchStrOut, BatchAbortReq)), f"error recv type {type(recv_ans)}"
             if isinstance(recv_ans, BatchStrOut):
                 for req_id, text, metadata, finished, abort in recv_ans.reqs_infs:
