@@ -46,18 +46,18 @@ class Adapter(nn.Module, loralib.LoRALayer):
         def T(w):
             return w.transpose(0, 1) if self.fan_in_fan_out else w
 
-        if mode:
-            if self.merge_weights and self.merged:
-                # Make sure that the weights are not merged
-                if self.r > 0:
-                    self.weight.data -= T(self.lora_B @ self.lora_A) * self.scaling
-                self.merged = False
-        else:
-            if self.merge_weights and not self.merged:
-                # Merge the weights and mark it
-                if self.r > 0:
-                    self.weight.data += T(self.lora_B @ self.lora_A) * self.scaling
-                self.merged = True
+        # if mode:
+        #     if self.merge_weights and self.merged:
+        #         # Make sure that the weights are not merged
+        #         if self.r > 0:
+        #             self.weight.data -= T(self.lora_B @ self.lora_A) * self.scaling
+        #         self.merged = False
+        # else:
+        #     if self.merge_weights and not self.merged:
+        #         # Merge the weights and mark it
+        #         if self.r > 0:
+        #             self.weight.data += T(self.lora_B @ self.lora_A) * self.scaling
+        #         self.merged = True
 
     def forward(self, x: torch.Tensor):
         if self.r > 0 and not self.merged:
@@ -75,20 +75,17 @@ class MultiLinear(nn.Linear):
         self.linear = linear
         self.adapters = nn.ModuleList(Adapter(in_features, out_features, r, lora_alpha, lora_dropout, merge_weights) for _ in
                                       range(num_adapters))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.Linear.reset_parameters(self)
 
     def forward(self, x, masking):
-        result = None
+        result = self.linear(x)
 
         for i in range(self.num_adapters):
-            def T(w):
-                return w.transpose(0, 1) if self.adapters[i].fan_in_fan_out else w
-
-            result = self.linear(x)
-
-            if self.adapters[i].r > 0 and not self.adapters[i].merged:
+            if self.adapters[i].r > 0:
                 result += self.adapters[i](x) * masking[:, i].view(-1, 1, 1)
-            else:
-                result += self.linear(x)
 
         return result
 
@@ -180,8 +177,8 @@ class LoRABert(transformers.PreTrainedModel):
                                                                                         lora_dropout=0.1)
 
 
-    def forward(self, x, mask, masking):
-        bert_out = self.bert(x, attention_mask=mask, masking=masking)
+    def forward(self, x, mask):
+        bert_out = self.bert(x, attention_mask=mask)
         o = bert_out.last_hidden_state[:, 0, :]
         o = self.do(o)
         o = self.relu(o)
