@@ -91,7 +91,7 @@ class MultiLinear(nn.Linear):
 
 
 class CustomBert(transformers.PreTrainedModel):
-    def __init__(self, bert, num_adapters=2):
+    def __init__(self, bert, num_adapters=2, rank=8, alpha=32):
         super(CustomBert, self).__init__(config=BertConfig.from_pretrained('google/bert_uncased_L-2_H-128_A-2'))
         self.bert = bert
         self.l1 = nn.Linear(128, 1)
@@ -106,8 +106,8 @@ class CustomBert(transformers.PreTrainedModel):
                 if "query" in name:
                     self.bert.encoder.layer[idx].attention.self.query = MultiLinear(module,
                                                                                     module.in_features,
-                                                                                    module.out_features, r=8,
-                                                                                    lora_alpha=32, lora_dropout=0.1,
+                                                                                    module.out_features, r=rank,
+                                                                                    lora_alpha=alpha, lora_dropout=0.1,
                                                                                     num_adapters=num_adapters
                                                                                     )
 
@@ -117,8 +117,8 @@ class CustomBert(transformers.PreTrainedModel):
                 elif "key" in name:
                     self.bert.encoder.layer[idx].attention.self.key = MultiLinear(module,
                                                                                   module.in_features,
-                                                                                  module.out_features, r=8,
-                                                                                  lora_alpha=32, lora_dropout=0.1,
+                                                                                  module.out_features, r=rank,
+                                                                                  lora_alpha=alpha, lora_dropout=0.1,
                                                                                   num_adapters=num_adapters
                                                                                   )
 
@@ -126,8 +126,8 @@ class CustomBert(transformers.PreTrainedModel):
                 elif "value" in name:
                     self.bert.encoder.layer[idx].attention.self.value = MultiLinear(module,
                                                                                     module.in_features,
-                                                                                    module.out_features, r=8,
-                                                                                    lora_alpha=32, lora_dropout=0.1,
+                                                                                    module.out_features, r=rank,
+                                                                                    lora_alpha=alpha, lora_dropout=0.1,
                                                                                     num_adapters=num_adapters
                                                                                     )
 
