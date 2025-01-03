@@ -13,7 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch BERT model."""
+"""
+Modified PyTorch BERT model. Inside the forward method of any layer, an additional argument `masking` is added.
+This is done to support the simultaneous training of multiple LoRA adapters in the same training loop.
+"""
 
 import math
 import os

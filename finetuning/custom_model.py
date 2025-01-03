@@ -9,6 +9,9 @@ from transformers import BertConfig
 
 
 class Adapter(nn.Module, loralib.LoRALayer):
+    """
+    Adapter class similar to that of the original code from Microsoft.
+    """
     # LoRA implemented in a dense layer
     def __init__(
             self,
@@ -68,6 +71,9 @@ class Adapter(nn.Module, loralib.LoRALayer):
 
 
 class MultiLinear(nn.Linear):
+    """
+    MultiLinear class to add multiple adapters to the BERT model. It has the original linear layer and multiple adapters.
+    """
     def __init__(self, linear, in_features, out_features, r, lora_alpha, lora_dropout, num_adapters=2,
                  merge_weights=True, **kwargs):
         self.num_adapters = num_adapters
@@ -91,6 +97,9 @@ class MultiLinear(nn.Linear):
 
 
 class CustomBert(transformers.PreTrainedModel):
+    """
+    Custom BERT model with LoRA layers applied to the query, key, and value layers of the self-attention mechanism.
+    """
     def __init__(self, bert, num_adapters=2, rank=8, alpha=32):
         super(CustomBert, self).__init__(config=BertConfig.from_pretrained('google/bert_uncased_L-2_H-128_A-2'))
         self.bert = bert
@@ -145,6 +154,9 @@ class CustomBert(transformers.PreTrainedModel):
 
 
 class LoRABert(transformers.PreTrainedModel):
+    """
+    Classic LoRA implementation applied to query, key, and value layers of the self-attention mechanism.
+    """
     def __init__(self, bert, num_adapters=2):
         super(LoRABert, self).__init__(config=BertConfig.from_pretrained('google/bert_uncased_L-2_H-128_A-2'))
         self.bert = bert
