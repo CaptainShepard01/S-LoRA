@@ -31,8 +31,8 @@ class Adapter(nn.Module, loralib.LoRALayer):
         # self.fan_in_fan_out = fan_in_fan_out
 
         # Actual trainable parameters
-        self.lora_A = nn.Parameter(torch.zeros((r, in_features)))
-        self.lora_B = nn.Parameter(torch.zeros((out_features, r)))
+        self.lora_A = nn.Parameter(torch.zeros((in_features, r)))
+        self.lora_B = nn.Parameter(torch.zeros((r, out_features)))
 
         self.scaling = self.lora_alpha / self.r
         # Freezing the pre-trained weight matrix
@@ -67,7 +67,7 @@ class Adapter(nn.Module, loralib.LoRALayer):
         #         self.merged = True
 
     def forward(self, x: torch.Tensor):
-        result = (self.lora_dropout(x) @ self.lora_A.transpose(0, 1) @ self.lora_B.transpose(0, 1)) * self.scaling
+        result = (self.lora_dropout(x) @ self.lora_A @ self.lora_B) * self.scaling
 
         # result = self.lora_A(x)
         # result = self.lora_B(result)
@@ -100,8 +100,9 @@ class MultiLinear(nn.Linear):
             self.adapters[i].train(mode)
 
     def forward(self, x, masking):
-        # result = self.linear(x)
         result = F.linear(x, self.weight, bias=self.bias)
+
+        # result += self.adapters[masking](x)
 
         for i in range(self.num_adapters):
             result += self.adapters[i](x) * masking[:, i].view(-1, 1, 1)
