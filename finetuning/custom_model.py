@@ -106,12 +106,12 @@ class MultiLinear(nn.Linear):
         return result
 
 
-class CustomBert(nn.Module):
+class CustomBert(transformers.PreTrainedModel):
     """
     Custom BERT model with LoRA layers applied to the query, key, and value layers of the self-attention mechanism.
     """
     def __init__(self, bert, num_adapters=2, rank=8, alpha=32):
-        super().__init__()
+        super().__init__(config=BertConfig.from_pretrained('google-bert/bert-base-uncased'))
         self.bert = bert
         self.l1 = nn.Linear(bert.config.hidden_size, 1)
         self.do = nn.Dropout(0.1)
@@ -172,9 +172,9 @@ class LoRABert(transformers.PreTrainedModel):
     Classic LoRA implementation applied to query, key, and value layers of the self-attention mechanism.
     """
     def __init__(self, bert, num_adapters=2):
-        super(LoRABert, self).__init__(config=BertConfig.from_pretrained('google/bert_uncased_L-2_H-128_A-2'))
+        super().__init__(config=BertConfig.from_pretrained('google-bert/bert-base-uncased'))
         self.bert = bert
-        self.l1 = nn.Linear(128, 1)
+        self.l1 = nn.Linear(bert.config.hidden_size, 1)
         self.do = nn.Dropout(0.1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
@@ -184,23 +184,29 @@ class LoRABert(transformers.PreTrainedModel):
             if isinstance(module, nn.Linear) and "encoder" and "attention" in name:
                 idx = int(name.split(".")[2])
                 if "query" in name:
-                    self.bert.encoder.layer[idx].attention.self.query = loralib.Linear(module.in_features,
-                                                                                        module.out_features,
-                                                                                        r=8, lora_alpha=32,
-                                                                                        lora_dropout=0.1)
+                    new_layer = loralib.Linear(module.in_features,
+                                            module.out_features,
+                                            r=8, lora_alpha=32,
+                                            lora_dropout=0.1)
+                    new_layer.load_state_dict(module.state_dict(), strict=False)
+                    self.bert.encoder.layer[idx].attention.self.query = new_layer.to(module.weight.device)
 
 
                 elif "key" in name:
-                    self.bert.encoder.layer[idx].attention.self.key = loralib.Linear(module.in_features,
-                                                                                        module.out_features,
-                                                                                        r=8, lora_alpha=32,
-                                                                                        lora_dropout=0.1)
+                    new_layer = loralib.Linear(module.in_features,
+                                            module.out_features,
+                                            r=8, lora_alpha=32,
+                                            lora_dropout=0.1)
+                    new_layer.load_state_dict(module.state_dict(), strict=False)
+                    self.bert.encoder.layer[idx].attention.self.key = new_layer.to(module.weight.device)
 
                 elif "value" in name:
-                    self.bert.encoder.layer[idx].attention.self.value = loralib.Linear(module.in_features,
-                                                                                        module.out_features,
-                                                                                        r=8, lora_alpha=32,
-                                                                                        lora_dropout=0.1)
+                    new_layer = loralib.Linear(module.in_features,
+                                            module.out_features,
+                                            r=8, lora_alpha=32,
+                                            lora_dropout=0.1)
+                    new_layer.load_state_dict(module.state_dict(), strict=False)
+                    self.bert.encoder.layer[idx].attention.self.value = new_layer.to(module.weight.device)
 
 
     def forward(self, x, mask):
