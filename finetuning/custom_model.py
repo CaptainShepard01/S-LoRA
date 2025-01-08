@@ -69,10 +69,6 @@ class Adapter(nn.Module, loralib.LoRALayer):
     def forward(self, x: torch.Tensor):
         result = (self.lora_dropout(x) @ self.lora_A @ self.lora_B) * self.scaling
 
-        # result = self.lora_A(x)
-        # result = self.lora_B(result)
-        # result = self.lora_dropout(result) * self.scaling
-
         return result
 
 
@@ -105,7 +101,7 @@ class MultiLinear(nn.Linear):
         # result += self.adapters[masking](x)
 
         for i in range(self.num_adapters):
-            result += self.adapters[i](x) * masking[:, i].view(-1, 1, 1)
+            result += masking[:, i].view(-1, 1, 1) * self.adapters[i](x)
 
         return result
 
@@ -117,7 +113,7 @@ class CustomBert(nn.Module):
     def __init__(self, bert, num_adapters=2, rank=8, alpha=32):
         super().__init__()
         self.bert = bert
-        self.l1 = nn.Linear(128, 1)
+        self.l1 = nn.Linear(bert.config.hidden_size, 1)
         self.do = nn.Dropout(0.1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
