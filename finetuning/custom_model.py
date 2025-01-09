@@ -76,7 +76,7 @@ class MultiLinear(nn.Linear):
     """
     MultiLinear class to add multiple adapters to the BERT model. It has the original linear layer and multiple adapters.
     """
-    def __init__(self, in_features, out_features, r, lora_alpha, lora_dropout=0.1, num_adapters=2,
+    def __init__(self, in_features, out_features, r, lora_alpha, lora_dropout=0., num_adapters=2,
                  merge_weights=False, **kwargs):
         self.num_adapters = num_adapters
         super().__init__(in_features, out_features, **kwargs)
@@ -110,7 +110,7 @@ class CustomBert(transformers.PreTrainedModel):
     """
     Custom BERT model with LoRA layers applied to the query, key, and value layers of the self-attention mechanism.
     """
-    def __init__(self, bert, num_adapters=2, rank=8, alpha=32):
+    def __init__(self, bert, num_adapters=2, rank=8, alpha=8):
         super().__init__(config=BertConfig.from_pretrained('google-bert/bert-base-uncased'))
         self.bert = bert
         self.l1 = nn.Linear(bert.config.hidden_size, 1)
@@ -122,36 +122,23 @@ class CustomBert(transformers.PreTrainedModel):
         for i, (name, module) in enumerate(self.bert.named_modules()):
             if isinstance(module, nn.Linear) and "encoder" and "attention" in name:
                 idx = int(name.split(".")[2])
+                new_layer = MultiLinear(module.in_features,
+                                        module.out_features,
+                                        r=rank,
+                                        lora_alpha=alpha,
+                                        num_adapters=num_adapters
+                                        )
                 if "query" in name:
-                    new_layer = MultiLinear(module.in_features,
-                                            module.out_features,
-                                            r=rank,
-                                            lora_alpha=alpha, lora_dropout=0.1,
-                                            num_adapters=num_adapters
-                                            )
                     new_layer.load_state_dict(module.state_dict(), strict=False)
                     self.bert.encoder.layer[idx].attention.self.query = new_layer.to(module.weight.device)
 
                     assert torch.allclose(module.weight, self.bert.encoder.layer[idx].attention.self.query.weight)
-
                 elif "key" in name:
-                    new_layer = MultiLinear(module.in_features,
-                                            module.out_features,
-                                            r=rank,
-                                            lora_alpha=alpha, lora_dropout=0.1,
-                                            num_adapters=num_adapters
-                                            )
                     new_layer.load_state_dict(module.state_dict(), strict=False)
                     self.bert.encoder.layer[idx].attention.self.key = new_layer.to(module.weight.device)
 
                     assert torch.allclose(module.weight, self.bert.encoder.layer[idx].attention.self.key.weight)
                 elif "value" in name:
-                    new_layer = MultiLinear(module.in_features,
-                                            module.out_features,
-                                            r=rank,
-                                            lora_alpha=alpha, lora_dropout=0.1,
-                                            num_adapters=num_adapters
-                                            )
                     new_layer.load_state_dict(module.state_dict(), strict=False)
                     self.bert.encoder.layer[idx].attention.self.value = new_layer.to(module.weight.device)
 
@@ -171,7 +158,7 @@ class LoRABert(transformers.PreTrainedModel):
     """
     Classic LoRA implementation applied to query, key, and value layers of the self-attention mechanism.
     """
-    def __init__(self, bert, num_adapters=2):
+    def __init__(self, bert, rank=8, alpha=8):
         super().__init__(config=BertConfig.from_pretrained('google-bert/bert-base-uncased'))
         self.bert = bert
         self.l1 = nn.Linear(bert.config.hidden_size, 1)
@@ -183,31 +170,43 @@ class LoRABert(transformers.PreTrainedModel):
         for i, (name, module) in enumerate(self.bert.named_modules()):
             if isinstance(module, nn.Linear) and "encoder" and "attention" in name:
                 idx = int(name.split(".")[2])
+                new_layer = loralib.Linear(module.in_features,
+                                           module.out_features,
+                                           r=rank, lora_alpha=alpha,
+                                           lora_dropout=0.)
                 if "query" in name:
-                    new_layer = loralib.Linear(module.in_features,
-                                            module.out_features,
-                                            r=8, lora_alpha=32,
-                                            lora_dropout=0.1)
                     new_layer.load_state_dict(module.state_dict(), strict=False)
                     self.bert.encoder.layer[idx].attention.self.query = new_layer.to(module.weight.device)
-
-
                 elif "key" in name:
-                    new_layer = loralib.Linear(module.in_features,
-                                            module.out_features,
-                                            r=8, lora_alpha=32,
-                                            lora_dropout=0.1)
                     new_layer.load_state_dict(module.state_dict(), strict=False)
                     self.bert.encoder.layer[idx].attention.self.key = new_layer.to(module.weight.device)
-
                 elif "value" in name:
-                    new_layer = loralib.Linear(module.in_features,
-                                            module.out_features,
-                                            r=8, lora_alpha=32,
-                                            lora_dropout=0.1)
                     new_layer.load_state_dict(module.state_dict(), strict=False)
                     self.bert.encoder.layer[idx].attention.self.value = new_layer.to(module.weight.device)
 
+    def reset_adapter(self, rank, alpha):
+        for i, (name, module) in enumerate(self.bert.named_modules()):
+            if isinstance(module, MultiLinear):
+                idx = int(name.split(".")[2])
+                new_layer = loralib.Linear(module.in_features,
+                                           module.out_features,
+                                           r=rank, lora_alpha=alpha,
+                                           lora_dropout=0.)
+                if "query" in name:
+                    new_layer.weight = module.weight
+                    new_layer.bias = module.bias
+
+                    self.bert.encoder.layer[idx].attention.self.query = new_layer.to(module.weight.device)
+                elif "key" in name:
+                    new_layer.weight = module.weight
+                    new_layer.bias = module.bias
+
+                    self.bert.encoder.layer[idx].attention.self.key = new_layer.to(module.weight.device)
+                elif "value" in name:
+                    new_layer.weight = module.weight
+                    new_layer.bias = module.bias
+
+                    self.bert.encoder.layer[idx].attention.self.value = new_layer.to(module.weight.device)
 
     def forward(self, x, mask):
         bert_out = self.bert(x, attention_mask=mask)
